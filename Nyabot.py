@@ -4,7 +4,9 @@ import inspect
 import traceback
 import random
 import configparser
+import pixiv
 
+from asyncio import Event
 from os import listdir
 
 client = discord.Client()
@@ -13,7 +15,10 @@ parser.read('credentials.ini')
 token = parser['Login']['Token']
 ownerID = parser['Permissions']['Owner ID']
 prefixString = parser['Options']['Prefix String']
+pixID = parser['Login']['Pixiv ID']
+pixPass = parser['Login']['Pixiv Pass']
 voiceDict = {}
+flagDict = {}
 
 class NyaBot(discord.Client):
     def __init__(self):
@@ -28,7 +33,11 @@ class NyaBot(discord.Client):
                            "{0}sound list -> lists all nyavailable sounds\n"
                            "{0}sound list [filter] -> lists all nyavailable sounds containing the filter").format(prefixString),
                 "listnyas" : "Equivalent to {0}sound list \"nya\"",
-                "catnap" : "Owner use only! Puts me to bed."}
+                "catnap" : "Owner use only! Puts me to bed.",
+                "nyapic" : "Pulls a random pic from pixiv",
+                "nuzzle" : ("Usage:\n"
+                           "{0}nuzzle -> nuzzles you\n"
+                           "{0}nuzzle [user] -> nuzzles first user mentioned")}
     queue = []       
     """
     async def on_ready():
@@ -47,8 +56,15 @@ class NyaBot(discord.Client):
             if cmd.startswith('cmd_'):
                 cmdList.append(cmd.replace('cmd_', '^'))
         printString = 'Here is a list of nyavailable commands:\n' + '\n'.join(cmdList) + '\nType ' + prefixString + 'help [command] for instructions on a specific command.'
+                  
         await self.send_message(channel, printString)
         return
+        
+    async def cmd_nyapic(self, channel):
+        pix = pixiv.login(pixID, pixPass)
+        nyaList = pix.search("星空凛")
+        await self.send_message(channel, "http://www.pixiv.net/member_illust.php?mode=medium&illust_id=" + str(random.choice(nyaList).id))
+        
         
     async def cmd_nya(self, message):
         nyavySeals = ('What the nya did you just nyaing nyay about me, you little nya? ' 
@@ -109,56 +125,145 @@ class NyaBot(discord.Client):
         await self.send_message(channel, 'I\'ve messaged you with a list of nyavailable sounds!')
         return
     
-        
-    async def cmd_sound(self, channel, author, message):
-        soundFiles = listdir('Sounds')
-        soundFile = ""
-        vChan = author.voice_channel
-        if vChan == None:
+    async def cmd_nuzzle(self, channel, author, mentions):
+        nuzzleSet = {'http://www.lolzgif.com/wp-content/uploads/2012/09/cat-nuzzles-dog.gif',
+                     'http://i.imgur.com/a6aj1Tk.jpg',
+                     'http://distractify-media-prod.cdn.bingo/1492055-980x.jpg',
+                     'https://66.media.tumblr.com/22c4fbbc02efbc3ef99f956fca58e7d0/tumblr_nysupfhV0P1ui28jfo1_500.gif'}
+        nuzzleGif = random.choice(list(nuzzleSet))
+        if(len(mentions) == 0):
+            await self.send_message(channel, '*nuzzles ' + author.mention + '*\n' + nuzzleGif)
+        else:
+            await self.send_message(channel, author.mention + ' nuzzles ' + mentions[0].mention + '\n' + nuzzleGif)
+        return
+
+    async def cmd_joinvc(self, message, channel, author):
+        vChan = author.voice.voice_channel
+        if vChan == None:         # user not in a voice channel
             await self.send_message(channel, "You must be in a voice nyannel to use this nyammand!")
             return
-        if not vChan.permissions_for(vChan.server.me).speak:
-            await self.send_message(channel, "Unyable to speak in your channel.")
+        if not vChan.permissions_for(vChan.server.me).speak:    # no permission to join voice channel
+            await self.send_message(channel, "I am nyat allowed to join that voice channel.")
             return
+        serv = message.server
+        vClient = voiceDict.get(serv.id) 
+        if vClient != None and vClient.channel == vChan:     # already in the channel
+            await self.send_message(channel, "I'm nyalready in this channel!")
+            return
+        flag = flagDict.get(serv.id)
+        if flag != None and flag:         #check if another voice channel process is already running
+            await self.send_message(channel, "One thing nyat a time, please!")
+            return
+        flagDict[serv.id] = True 
+        if vClient != None:
+            await vClient.move_to(vChan)
+            voiceDict[serv.id]["channel"] = vChan
+            flagDict[server.id] = False
+            return
+        voiceDict[serv.id] = {}
+        voiceDict[serv.id]["client"] = await self.join_voice_channel(vChan)
+        voiceDict[serv.id]["channel"] = vChan
+        flagDict[serv.id] = False
+        return
+
+        
+                
+
+    
+     '''
+     Function name: cmd_sound
+     Parameters: channel - channel the command was sent in
+                 author  - person who sent the command
+                 message - message itself
+     Description: Plays a sound clip in a voice channel from the Sounds directory.
+                  If bot is not in a voice channel, calls joinvc to try to join
+                  If bot is already in a voice channel, author must be in the same voice channel
+                  Cannot be used while any other sound-related command is being used in the server
+     Return: n/a
+     '''
+                  
+    async def cmd_sound(self, channel, author, message):
+
+        soundFiles = listdir('Sounds')
+        soundFile = ""
         messageArray = message.content.split()
+        serv = message.server
+
         if len(messageArray) > 1:
+
             if messageArray[1] == "list":
                 await self.list_sounds(author, channel, message)
                 return
+
             soundFile = messageArray[1] + ".mp3"
+
             if not(soundFile in soundFiles):
                 await self.send_message(channel, "Innyalid File.")
                 return
+
         else:
             soundFile = random.choice(soundFiles)
-        soundFile = 'Sounds/' + soundFile
-        index = voiceDict.get(str(vChan.id))
-        if index != None:
-            await self.send_message(channel, 'I can only play one sound nyat a time!')
+
+
+        vChan = author.voice.voice_channel
+
+        if vChan == None:
+            await self.send_message(channel, "You must be in a voice nyannel to use this nyammand!")
             return
 
-        voiceDict[str(vChan.id)] = (await self.join_voice_channel(vChan), None)
+        if serv.me.voice.voice_channel != None and serv.me.voice.voice_channel != vChan:
+            await self.send_message(channel, "Wrong voice channel, buddy! Come join mine!")
+            return
+
+        if not vChan.permissions_for(vChan.server.me).speak:
+            await self.send_message(channel, "Unyable to speak in your channel.")
+            return
+
+        soundFile = 'Sounds/' + soundFile
+
+        if serv.voice_client == None:
+           await self.cmd_joinvc(message, channel, author)
+
+        flag = flagDict.get(serv.id) #server-exclusive mutual exclusion flag
+        if flag != None and flag:
+            await self.send_message(channel, "One thing nyat a time, please!")
+            return
+
+        flagDict[serv.id] = True
+        voiceDict[serv.id]["player"] = serv.voice_client.create_ffmpeg_player(soundFile)
         """
         async def afterFunc(vChan):
             await voiceDict[str(vChan.id)][0].disconnect()
             voiceDict[str(vChan.id)] = None
             return
-         """
-        voiceDict[str(vChan.id)] = (voiceDict[str(vChan.id)][0], voiceDict[str(vChan.id)][0].create_ffmpeg_player(soundFile)) # after = afterFunc(vChan)))
-        voiceDict[str(vChan.id)][1].start()
+        """
+        voiceDict[serv.id]["player"].start()
         
-        while not voiceDict[str(vChan.id)][1].is_done():
+        while not voiceDict[serv.id]["player"].is_done():
             await asyncio.sleep(1)
-        await voiceDict[str(vChan.id)][0].disconnect() 
-        voiceDict[str(vChan.id)] = None
-        
+        print("Done!")
+        voiceDict[serv.id]["player"] = None
+        flagDict[serv.id] = False
         return    
-    
 
- 
+    async def cmd_exitvc(self, channel, server):
+        if server.voice_client == None:
+            await self.send_message(channel, "Can't leave when I'm not in there in the first place.")
+            return
+        if flagDict.get(server.id) != None and flagDict[server.id]:
+            await self.send_message(channel, "One thing nyat a time, please!")
+            return
+        flagDict[server.id] = True
+        await server.voice_client.disconnect()
+        voiceDict[server.id] = None
+        flagDict[server.id] = False
+        await self.send_message(channel, "Successfully disconnected!")
+        return
+
+    
     async def on_message(self, message):
 
-        if message.content.startswith(prefixString):
+        if message.content.startswith(prefixString) and message.server != None:
     
             command = getattr(self, 'cmd_' + (message.content.split()[0])[len(prefixString):], None)
         
@@ -174,6 +279,12 @@ class NyaBot(discord.Client):
                         
                     if args.pop('author', None):
                         commandArgs['author'] = message.author
+                        
+                    if args.pop('mentions', None):
+                        commandArgs['mentions'] = message.mentions
+
+                    if args.pop('server', None):
+                        commandArgs['server'] = message.server
                     
                     await command(**commandArgs)
                 except:
